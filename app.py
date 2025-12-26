@@ -132,32 +132,70 @@ def webhook_mercadopago():
     try:
         data = request.json
         
-        # Extrair informações do webhook
-        transacao = {
-            'id_transacao': data.get('id'),
-            'valor': data.get('transaction_amount'),
-            'data': data.get('date_created'),
-            'nome_pagador': data.get('payer', {}).get('first_name', '') + ' ' + data.get('payer', {}).get('last_name', ''),
-            'status': 'pendente',
-            'tipo': None,
-            'vinculado': False
-        }
-        
-        # Tentar vincular automaticamente pelo nome
-        membros = supabase.table('membros').select('*').execute()
-        for membro in membros.data:
-            if membro['nome_completo'].lower() in transacao['nome_pagador'].lower():
-                transacao['membro_id'] = membro['id']
-                transacao['codigo_membro'] = membro['codigo']
-                transacao['vinculado'] = True
-                break
-        
-        # Salvar transação
-        supabase.table('transacoes').insert(transacao).execute()
-        
+        # Verificar se é um webhook de pagamento
+        if data.get('type') == 'payment':
+            payment_id = data.get('data', {}).get('id')
+            
+            # Aqui você precisa buscar os detalhes do pagamento na API do Mercado Pago
+            # Para isso, precisamos do ACCESS_TOKEN
+            access_token = os.getenv('MERCADO_PAGO_ACCESS_TOKEN', 'APP_USR-479934890576827-122600-bb5a06cce455dc0e3d27f9aa1d7a9765-3065568899')
+            
+            if payment_id and access_token:
+                # Buscar detalhes do pagamento
+                import requests
+                headers = {
+                    'Authorization': f'Bearer {access_token}'
+                }
+                
+                response = requests.get(
+                    f'https://api.mercadopago.com/v1/payments/{payment_id}',
+                    headers=headers
+                )
+                
+                if response.status_code == 200:
+                    payment_data = response.json()
+                    
+                    # Extrair informações importantes
+                    transacao = {
+                        'id_transacao': str(payment_data.get('id')),
+                        'valor': float(payment_data.get('transaction_amount', 0)),
+                        'data': payment_data.get('date_created'),
+                        'nome_pagador': payment_data.get('payer', {}).get('first_name', '') + ' ' + payment_data.get('payer', {}).get('last_name', ''),
+                        'email_pagador': payment_data.get('payer', {}).get('email', ''),
+                        'status_mp': payment_data.get('status'),
+                        'status': 'pendente',  # Nosso sistema
+                        'tipo': None,
+                        'vinculado': False,
+                        'metodo_pagamento': payment_data.get('payment_type_id', ''),
+                        'descricao': payment_data.get('description', '')
+                    }
+                    
+                    # Tentar vincular automaticamente pelo nome
+                    if transacao['nome_pagador'].strip():
+                        membros = supabase.table('membros').select('*').execute()
+                        for membro in membros.data:
+                            nome_membro = membro['nome_completo'].lower()
+                            nome_pagador = transacao['nome_pagador'].lower()
+                            
+                            # Tentativa simples de matching
+                            if (nome_membro in nome_pagador) or (nome_pagador in nome_membro):
+                                transacao['membro_id'] = membro['id']
+                                transacao['codigo_membro'] = membro['codigo']
+                                transacao['vinculado'] = True
+                                break
+                    
+                    # Salvar transação no banco
+                    supabase.table('transacoes').insert(transacao).execute()
+                    
+                    print(f"Transação {payment_id} salva com sucesso")
+                    return jsonify({'message': 'Webhook processado', 'payment_id': payment_id}), 200
+                
         return jsonify({'message': 'Webhook recebido'}), 200
+        
     except Exception as e:
         print(f"Erro webhook: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return jsonify({'error': str(e)}), 500
 
 # ========== TRANSAÇÕES ==========
